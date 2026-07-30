@@ -115,9 +115,11 @@
 <div id="modal" class="modal-bg hidden">
   <div class="modal">
     <h3>Adicionar documento</h3>
+    <div class="field"><label>Tipo</label><select id="mTipo"><option value="arquivo">Arquivo (PDF, etc.)</option><option value="link">Link (página web / YouTube)</option></select></div>
     <div class="field"><label>Título</label><input id="mTitulo" type="text" placeholder="Ex.: Rotina da Atenção ao Paciente"></div>
     <div class="field"><label>Categoria</label><select id="mCat"></select></div>
-    <div class="field"><label>Arquivo</label><input id="mFile" type="file"></div>
+    <div class="field" id="fieldFile"><label>Arquivo</label><input id="mFile" type="file"></div>
+    <div class="field hidden" id="fieldUrl"><label>Endereço (URL)</label><input id="mUrl" type="url" placeholder="https://manual.dontus.com"></div>
     <div class="msg" id="mMsg"></div>
     <div class="row">
       <button class="btn gold" id="mSave">Enviar</button>
@@ -132,7 +134,7 @@
    ============================================================ */
 const SUPABASE_URL      = "https://zqkvqazuhwclhmnlexac.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpxa3ZxYXp1aHdjbGhtbmxleGFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzNjc1NTUsImV4cCI6MjEwMDk0MzU1NX0.CrrJfuDynuvXH9Li_uw3KXU_pEhnUurqx_SxAZOGePI";
-const ADMIN_EMAILS      = ["administrativo@oroclin.com"];                  // <-- quem pode subir/excluir
+const ADMIN_EMAILS      = ["caio@evoar.com"];                  // <-- quem pode subir/excluir
 const BUCKET            = "documentos";
 const CATEGORIAS        = ["Ferramentas","Manuais da Jornada","Treinamentos","Rotinas","Contratos","Financeiro","Marca","Modelos e Documentos"];
 /* ============================================================ */
@@ -212,17 +214,27 @@ function render(){
     const items=byCat[cat]; if(!items||!items.length) return;
     html += '<div class="cat"><h2>'+esc(cat)+'</h2><div class="grid">';
     items.forEach(d=>{
-      const ext=(d.arquivo_path||"").split(".").pop().toUpperCase().slice(0,4);
-      html += '<div class="doc"><div class="ic">'+esc(ext||"DOC")+'</div>'
+      const isLink = d.tipo==="link";
+      const ic = isLink ? "WEB" : ((d.arquivo_path||"").split(".").pop().toUpperCase().slice(0,4)||"DOC");
+      const meta = isLink ? "Link · "+fmtDate(d.created_at) : (fmtSize(d.tamanho)+" · "+fmtDate(d.created_at));
+      const botao = isLink
+        ? '<button class="btn sm" onclick="abrir(\''+d.id+'\')">Abrir</button>'
+        : '<button class="btn sm" onclick="baixar(\''+d.id+'\')">Baixar</button>';
+      html += '<div class="doc"><div class="ic">'+esc(ic)+'</div>'
             + '<div class="t">'+esc(d.titulo)+'</div>'
-            + '<div class="meta">'+fmtSize(d.tamanho)+' · '+fmtDate(d.created_at)+'</div>'
-            + '<div class="actions"><button class="btn sm" onclick="baixar(\''+d.id+'\')">Baixar</button>'
+            + '<div class="meta">'+meta+'</div>'
+            + '<div class="actions">'+botao
             + (isAdmin?'<button class="del" onclick="excluir(\''+d.id+'\')">Excluir</button>':'')
             + '</div></div>';
     });
     html += '</div></div>';
   });
   $("docs").innerHTML=html;
+}
+
+function abrir(id){
+  const d = allDocs.find(x=>String(x.id)===String(id)); if(!d||!d.url) return;
+  window.open(d.url, "_blank", "noopener");
 }
 
 async function baixar(id){
@@ -235,28 +247,44 @@ async function baixar(id){
 async function excluir(id){
   const d = allDocs.find(x=>String(x.id)===String(id)); if(!d) return;
   if(!confirm('Excluir "'+d.titulo+'"?')) return;
-  await sb.storage.from(BUCKET).remove([d.arquivo_path]);
+  if(d.tipo!=="link" && d.arquivo_path){ await sb.storage.from(BUCKET).remove([d.arquivo_path]); }
   await sb.from("documentos").delete().eq("id", d.id);
   loadDocs();
 }
 
 /* ----- upload (admin) ----- */
+function toggleTipo(){
+  const link = $("mTipo").value==="link";
+  $("fieldUrl").classList.toggle("hidden", !link);
+  $("fieldFile").classList.toggle("hidden", link);
+}
 function openModal(){
   $("mCat").innerHTML = CATEGORIAS.map(c=>'<option>'+esc(c)+'</option>').join("");
-  $("mTitulo").value=""; $("mFile").value=""; $("mMsg").textContent="";
+  $("mTipo").value="arquivo"; $("mTitulo").value=""; $("mFile").value=""; $("mUrl").value=""; $("mMsg").textContent="";
+  toggleTipo();
   $("modal").classList.remove("hidden");
 }
 function closeModal(){ $("modal").classList.add("hidden"); }
 
 async function salvar(){
-  const titulo=$("mTitulo").value.trim(), cat=$("mCat").value, file=$("mFile").files[0];
-  if(!titulo||!file){ $("mMsg").className="msg err"; $("mMsg").textContent="Preencha o título e escolha um arquivo."; return; }
+  const titulo=$("mTitulo").value.trim(), cat=$("mCat").value, tipo=$("mTipo").value;
+  if(!titulo){ $("mMsg").className="msg err"; $("mMsg").textContent="Preencha o título."; return; }
   $("mMsg").className="msg"; $("mMsg").textContent="Enviando...";
+  if(tipo==="link"){
+    let url=$("mUrl").value.trim();
+    if(!url){ $("mMsg").className="msg err"; $("mMsg").textContent="Cole o endereço (URL)."; return; }
+    if(!/^https?:\/\//i.test(url)) url="https://"+url;
+    const ins = await sb.from("documentos").insert({ titulo, categoria:cat, tipo:"link", url });
+    if(ins.error){ $("mMsg").className="msg err"; $("mMsg").textContent="Erro ao registrar: "+ins.error.message; return; }
+    closeModal(); loadDocs(); return;
+  }
+  const file=$("mFile").files[0];
+  if(!file){ $("mMsg").className="msg err"; $("mMsg").textContent="Escolha um arquivo."; return; }
   const safe = file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
   const path = cat.replace(/[^a-zA-Z0-9]/g,"_")+"/"+Date.now()+"_"+safe;
   const up = await sb.storage.from(BUCKET).upload(path, file);
   if(up.error){ $("mMsg").className="msg err"; $("mMsg").textContent="Erro no upload: "+up.error.message; return; }
-  const ins = await sb.from("documentos").insert({ titulo, categoria:cat, arquivo_path:path, tamanho:file.size });
+  const ins = await sb.from("documentos").insert({ titulo, categoria:cat, tipo:"arquivo", arquivo_path:path, tamanho:file.size });
   if(ins.error){ $("mMsg").className="msg err"; $("mMsg").textContent="Erro ao registrar: "+ins.error.message; return; }
   closeModal(); loadDocs();
 }
@@ -271,6 +299,7 @@ $("btnLogin").onclick=doLogin;
 $("senha").addEventListener("keydown",e=>{ if(e.key==="Enter") doLogin(); });
 $("btnLogout").onclick=logout;
 $("btnAdd").onclick=openModal;
+$("mTipo").onchange=toggleTipo;
 $("mCancel").onclick=closeModal;
 $("mSave").onclick=salvar;
 $("search").addEventListener("input",render);
